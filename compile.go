@@ -1,4 +1,4 @@
-package template
+package var_template
 
 import (
 	"strings"
