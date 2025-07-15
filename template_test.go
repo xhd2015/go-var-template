@@ -62,6 +62,67 @@ func TestCompile(t *testing.T) {
 			wantVars: []string{"name"},
 			wantNum:  2,
 		},
+		// New tests for $name syntax
+		{
+			name:     "simple dollar variable",
+			template: "Hello $name",
+			wantVars: []string{"name"},
+			wantNum:  1,
+		},
+		{
+			name:     "dollar variable with separator",
+			template: "Hello $name.txt",
+			wantVars: []string{"name"},
+			wantNum:  1,
+		},
+		{
+			name:     "dollar variable with underscore",
+			template: "Hello $name_suffix",
+			wantVars: []string{"name_suffix"},
+			wantNum:  1,
+		},
+		{
+			name:     "mixed syntax",
+			template: "Hello $name and ${age}",
+			wantVars: []string{"age", "name"},
+			wantNum:  2,
+		},
+		{
+			name:     "multiple dollar variables",
+			template: "$host:$port/$path",
+			wantVars: []string{"host", "path", "port"},
+			wantNum:  3,
+		},
+		{
+			name:     "escaped dollar variable",
+			template: "Hello \\$name",
+			wantVars: []string{},
+			wantNum:  0,
+		},
+		{
+			name:     "dollar at end",
+			template: "Hello $name",
+			wantVars: []string{"name"},
+			wantNum:  1,
+		},
+		{
+			name:     "dollar macro",
+			template: "Time: $@timestamp",
+			wantVars: []string{"@timestamp"},
+			wantNum:  1,
+		},
+		{
+			name:     "invalid dollar patterns",
+			template: "$ $1name $-invalid",
+			wantVars: []string{},
+			wantNum:  0,
+		},
+		{
+			name:     "dollar followed by brace",
+			template: "Test $name and ${other}",
+			wantVars: []string{"name", "other"},
+			wantNum:  2,
+		},
 	}
 
 	for _, tt := range tests {
@@ -231,6 +292,67 @@ func TestTemplateExecute(t *testing.T) {
 			vars:     map[string]string{"age": "25"},
 			want:     "Age: 25",
 		},
+		// New tests for $name syntax
+		{
+			name:     "simple dollar substitution",
+			template: "Hello $name",
+			vars:     map[string]string{"name": "John"},
+			want:     "Hello John",
+		},
+		{
+			name:     "dollar variable with separator",
+			template: "File: $name.txt",
+			vars:     map[string]string{"name": "test"},
+			want:     "File: test.txt",
+		},
+		{
+			name:     "dollar variable with underscore",
+			template: "Var: $name_suffix",
+			vars:     map[string]string{"name_suffix": "value"},
+			want:     "Var: value",
+		},
+		{
+			name:     "mixed syntax execution",
+			template: "Hello $name, you are ${age} years old",
+			vars:     map[string]string{"name": "John", "age": "25"},
+			want:     "Hello John, you are 25 years old",
+		},
+		{
+			name:     "multiple dollar variables",
+			template: "$host:$port/$path",
+			vars:     map[string]string{"host": "localhost", "port": "8080", "path": "api"},
+			want:     "localhost:8080/api",
+		},
+		{
+			name:     "dollar at end",
+			template: "Hello $name",
+			vars:     map[string]string{"name": "World"},
+			want:     "Hello World",
+		},
+		{
+			name:     "dollar macro",
+			template: "Time: $@timestamp",
+			vars:     map[string]string{},
+			want:     "Time: " + strconv.FormatInt(time.Now().Unix(), 10),
+		},
+		{
+			name:     "consecutive dollar variables",
+			template: "$first$second",
+			vars:     map[string]string{"first": "Hello", "second": "World"},
+			want:     "HelloWorld",
+		},
+		{
+			name:     "dollar variable with spaces around",
+			template: "Hello $name !",
+			vars:     map[string]string{"name": "John"},
+			want:     "Hello John !",
+		},
+		{
+			name:     "dollar variable in quotes",
+			template: `"$name"`,
+			vars:     map[string]string{"name": "value"},
+			want:     `"value"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -241,8 +363,20 @@ func TestTemplateExecute(t *testing.T) {
 				t.Errorf("Execute() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !tt.wantErr && got != tt.want {
-				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			if !tt.wantErr {
+				// For timestamp tests, we need to be more flexible
+				if strings.Contains(tt.template, "@timestamp") {
+					if !strings.HasPrefix(got, "Time: ") {
+						t.Errorf("Execute() = %v, should start with 'Time: '", got)
+					}
+					// Check if the timestamp part is a valid number
+					timestampStr := strings.TrimPrefix(got, "Time: ")
+					if _, err := strconv.ParseInt(timestampStr, 10, 64); err != nil {
+						t.Errorf("Execute() timestamp = %v, should be a valid number", timestampStr)
+					}
+				} else if got != tt.want {
+					t.Errorf("Execute() = %v, want %v", got, tt.want)
+				}
 			}
 		})
 	}
@@ -532,6 +666,103 @@ func TestComplexTemplate(t *testing.T) {
 
 	if !strings.Contains(result, `"timestamp":`) {
 		t.Errorf("Result should contain timestamp: %v", result)
+	}
+}
+
+// TestDollarSyntaxSeparators tests the separator handling for $name syntax
+func TestDollarSyntaxSeparators(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		vars     map[string]string
+		want     string
+	}{
+		{
+			name:     "dot separator",
+			template: "$name.txt",
+			vars:     map[string]string{"name": "file"},
+			want:     "file.txt",
+		},
+		{
+			name:     "underscore in name",
+			template: "$name_suffix",
+			vars:     map[string]string{"name_suffix": "value"},
+			want:     "value",
+		},
+		{
+			name:     "multiple separators",
+			template: "$name.ext and $other-file",
+			vars:     map[string]string{"name": "test", "other": "another"},
+			want:     "test.ext and another-file",
+		},
+		{
+			name:     "slash separator",
+			template: "$path/file",
+			vars:     map[string]string{"path": "/home/user"},
+			want:     "/home/user/file",
+		},
+		{
+			name:     "colon separator",
+			template: "$host:$port",
+			vars:     map[string]string{"host": "localhost", "port": "8080"},
+			want:     "localhost:8080",
+		},
+		{
+			name:     "space separator",
+			template: "$first $second",
+			vars:     map[string]string{"first": "Hello", "second": "World"},
+			want:     "Hello World",
+		},
+		{
+			name:     "comma separator",
+			template: "$first,$second",
+			vars:     map[string]string{"first": "one", "second": "two"},
+			want:     "one,two",
+		},
+		{
+			name:     "semicolon separator",
+			template: "$first;$second",
+			vars:     map[string]string{"first": "cmd1", "second": "cmd2"},
+			want:     "cmd1;cmd2",
+		},
+		{
+			name:     "parentheses separator",
+			template: "$func($arg)",
+			vars:     map[string]string{"func": "print", "arg": "hello"},
+			want:     "print(hello)",
+		},
+		{
+			name:     "brackets separator",
+			template: "$array[$index]",
+			vars:     map[string]string{"array": "items", "index": "0"},
+			want:     "items[0]",
+		},
+		{
+			name:     "underscore vs separator",
+			template: "$name_var.ext",
+			vars:     map[string]string{"name_var": "test"},
+			want:     "test.ext",
+		},
+		{
+			name:     "mixed with brace syntax",
+			template: "$name.txt and ${other}.log",
+			vars:     map[string]string{"name": "file", "other": "debug"},
+			want:     "file.txt and debug.log",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := Compile(tt.template)
+			got, err := tmpl.Execute(tt.vars)
+			if err != nil {
+				t.Errorf("Execute() error = %v", err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

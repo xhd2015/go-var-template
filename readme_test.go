@@ -8,7 +8,7 @@ import (
 
 // TestQuickStart tests the quick start example from README
 func TestQuickStart(t *testing.T) {
-	// Basic usage
+	// Basic usage with ${name} syntax
 	tmpl := Compile("Hello ${name}")
 	result, err := tmpl.Execute(map[string]string{"name": "World"})
 	if err != nil {
@@ -17,6 +17,28 @@ func TestQuickStart(t *testing.T) {
 	}
 	if result != "Hello World" {
 		t.Errorf("Execute() = %q, want %q", result, "Hello World")
+	}
+
+	// Using $name syntax (equivalent to ${name})
+	tmpl2 := Compile("Hello $name")
+	result2, err := tmpl2.Execute(map[string]string{"name": "World"})
+	if err != nil {
+		t.Errorf("Execute() error = %v", err)
+		return
+	}
+	if result2 != "Hello World" {
+		t.Errorf("Execute() = %q, want %q", result2, "Hello World")
+	}
+
+	// Mixed syntax with separator handling
+	tmpl3 := Compile("File: $name.txt, Size: ${size?:0} bytes")
+	result3, err := tmpl3.Execute(map[string]string{"name": "document"})
+	if err != nil {
+		t.Errorf("Execute() error = %v", err)
+		return
+	}
+	if result3 != "File: document.txt, Size: 0 bytes" {
+		t.Errorf("Execute() = %q, want %q", result3, "File: document.txt, Size: 0 bytes")
 	}
 }
 
@@ -54,6 +76,58 @@ func TestBasicVariables(t *testing.T) {
 				t.Errorf("Execute() = %q, want %q", result, tt.want)
 			}
 		})
+	}
+}
+
+// TestDollarSyntaxExamples tests the dollar syntax examples from README
+func TestDollarSyntaxExamples(t *testing.T) {
+	// Simple file path template
+	pathTemplate := "$dir/$name.txt"
+	tmpl := Compile(pathTemplate)
+	path, err := tmpl.Execute(map[string]string{
+		"dir":  "/var/log",
+		"name": "app",
+	})
+	if err != nil {
+		t.Errorf("Execute() error = %v", err)
+		return
+	}
+	if path != "/var/log/app.txt" {
+		t.Errorf("Execute() = %q, want %q", path, "/var/log/app.txt")
+	}
+
+	// URL template with mixed syntax
+	urlTemplate := "$scheme://$host:$port/${path?:api}"
+	tmpl = Compile(urlTemplate)
+	url, err := tmpl.Execute(map[string]string{
+		"scheme": "https",
+		"host":   "api.example.com",
+		"port":   "443",
+	})
+	if err != nil {
+		t.Errorf("Execute() error = %v", err)
+		return
+	}
+	if url != "https://api.example.com:443/api" {
+		t.Errorf("Execute() = %q, want %q", url, "https://api.example.com:443/api")
+	}
+
+	// Database connection string
+	dbTemplate := "$user:$password@$host:$port/$database"
+	tmpl = Compile(dbTemplate)
+	dsn, err := tmpl.Execute(map[string]string{
+		"user":     "admin",
+		"password": "secret",
+		"host":     "localhost",
+		"port":     "5432",
+		"database": "myapp",
+	})
+	if err != nil {
+		t.Errorf("Execute() error = %v", err)
+		return
+	}
+	if dsn != "admin:secret@localhost:5432/myapp" {
+		t.Errorf("Execute() = %q, want %q", dsn, "admin:secret@localhost:5432/myapp")
 	}
 }
 

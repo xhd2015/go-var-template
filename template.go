@@ -128,6 +128,17 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 		} else {
 			val, ok = vars[vr.varName]
 		}
+
+		// Calculate the end position of the variable
+		var varEndPos int
+		if isDollarSyntax(s, vr.open) {
+			// $name syntax - end position is already calculated correctly
+			varEndPos = vr.close + 1
+		} else {
+			// ${name} syntax - add closing brace length
+			varEndPos = vr.close + len(close)
+		}
+
 		if !ok {
 			if applyDefault && !vr.isMacro && vr.hasDefaultValue {
 				val = vr.defaultValue
@@ -140,23 +151,24 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 				cpVar.close = b.Len() + (vr.close - oldIdx)
 				missingVarPositions = append(missingVarPositions, cpVar)
 				missingVarMap[vr.varName] = true
-				b.WriteString(s[oldIdx : vr.close+len(close)])
-				oldIdx = vr.close + 1
+				b.WriteString(s[oldIdx:varEndPos])
+				oldIdx = varEndPos
 				continue
 			}
 		}
+
 		if vr.isNumber &&
 			isChar(s, vr.open-1, '"') &&
-			isChar(s, vr.close+len(close), '"') &&
-			(j == 0 || !c.varPositions[j-1].isNumber || vr.open-1 > c.varPositions[j-1].close+len(close)) /*does not cross with previous var's ending*/ {
+			isChar(s, varEndPos, '"') &&
+			(j == 0 || !c.varPositions[j-1].isNumber || vr.open-1 > getVarEndPos(s, c.varPositions[j-1])) /*does not cross with previous var's ending*/ {
 			// trim quotes
 			b.WriteString(s[oldIdx : vr.open-1])
 			b.WriteString(val)
-			oldIdx = vr.close + len(close) + 1 /*len of "*/
+			oldIdx = varEndPos + 1 /*len of "*/
 		} else {
 			b.WriteString(s[oldIdx:vr.open])
 			b.WriteString(val)
-			oldIdx = vr.close + len(close)
+			oldIdx = varEndPos
 		}
 	}
 	// last
@@ -167,6 +179,20 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 		varPositions: missingVarPositions,
 		vars:         getVars(missingVarMap),
 	}, nil
+}
+
+// isDollarSyntax checks if a variable at the given position uses $name syntax
+func isDollarSyntax(s string, pos int) bool {
+	return pos < len(s) && s[pos] == '$' && (pos+1 >= len(s) || s[pos+1] != '{')
+}
+
+// getVarEndPos calculates the end position of a variable
+func getVarEndPos(s string, vr *varAndPosition) int {
+	if isDollarSyntax(s, vr.open) {
+		return vr.close + 1
+	} else {
+		return vr.close + len(close)
+	}
 }
 
 func isChar(s string, idx int, ch byte) bool {

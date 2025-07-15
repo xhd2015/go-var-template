@@ -79,6 +79,80 @@ type Var interface {
 	IsNumber() bool
 }
 
+// findNextDollarVar finds the next $name pattern in the string
+// Returns -1 if no valid $name pattern is found
+func findNextDollarVar(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '$' {
+			// Check if this is a ${ pattern (skip it)
+			if i+1 < len(s) && s[i+1] == '{' {
+				continue
+			}
+			// Check if this is a valid $name pattern
+			if i+1 < len(s) && isValidVarStart(s[i+1]) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// extractDollarVarName extracts the variable name from a $name pattern
+// Returns the variable name and the end position (exclusive)
+func extractDollarVarName(s string) (string, int) {
+	if len(s) == 0 || s[0] != '$' {
+		return "", 0
+	}
+
+	if len(s) == 1 {
+		return "", 0
+	}
+
+	// Skip the $
+	i := 1
+
+	// Check if first character is valid for variable name
+	if !isValidVarStart(s[i]) {
+		return "", 0
+	}
+
+	// Find the end of the variable name
+	start := i
+
+	// Handle macro case: $@timestamp
+	if s[i] == '@' {
+		i++ // Skip the @
+		// Continue with normal variable name characters
+		for i < len(s) && isValidVarChar(s[i]) {
+			i++
+		}
+	} else {
+		// Normal variable name
+		for i < len(s) && isValidVarChar(s[i]) {
+			i++
+		}
+	}
+
+	// Handle separator logic: $name.s -> ${name}.s,  $name_s -> ${name_s}
+	// If we hit a separator that's not underscore, stop
+	if i < len(s) && !isValidVarChar(s[i]) && s[i] != '_' {
+		// This is a separator, variable name ends here
+		return s[start:i], i
+	}
+
+	return s[start:i], i
+}
+
+// isValidVarStart checks if a character is valid for starting a variable name
+func isValidVarStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '@'
+}
+
+// isValidVarChar checks if a character is valid within a variable name
+func isValidVarChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
 func Compile(template string) *Template {
 	// find all variables and positions
 	var positions []*varAndPosition
@@ -86,43 +160,94 @@ func Compile(template string) *Template {
 	s := template
 	i := 0
 	index := 0
+
 	for s != "" {
-		openIdx := strings.Index(s, open)
-		if openIdx < 0 {
-			// no more
+		// Look for both ${} and $ patterns
+		braceOpenIdx := strings.Index(s, open)
+		dollarIdx := findNextDollarVar(s)
+
+		// Determine which pattern comes first
+		var nextIdx int
+		var isBracePattern bool
+
+		if braceOpenIdx >= 0 && dollarIdx >= 0 {
+			if braceOpenIdx < dollarIdx {
+				nextIdx = braceOpenIdx
+				isBracePattern = true
+			} else {
+				nextIdx = dollarIdx
+				isBracePattern = false
+			}
+		} else if braceOpenIdx >= 0 {
+			nextIdx = braceOpenIdx
+			isBracePattern = true
+		} else if dollarIdx >= 0 {
+			nextIdx = dollarIdx
+			isBracePattern = false
+		} else {
+			// no more variables
 			break
 		}
-		// escaped
-		if openIdx > 0 && s[openIdx-1] == '\\' {
-			i += openIdx + len(open)
-			s = s[openIdx+len(open):]
+
+		// Check for escaping
+		if nextIdx > 0 && s[nextIdx-1] == '\\' {
+			i += nextIdx + 1
+			s = s[nextIdx+1:]
 			continue
 		}
 
-		// next begin
-		openIdxEnd := openIdx + len(open)
-		closeIdx := strings.Index(s[openIdxEnd:], close)
-		if closeIdx < 0 {
-			break
-		}
-		closeIdx += openIdxEnd
-		varName := strings.TrimSpace(s[openIdxEnd:closeIdx])
+		var v *varAndPosition
+		var endIdx int
 
-		v := parseVarName(varName)
-		if v.varName == "" {
-			i += closeIdx + len(close)
-			s = s[closeIdx+len(close):]
-			continue
+		if isBracePattern {
+			// Handle ${name} pattern
+			openIdxEnd := nextIdx + len(open)
+			closeIdx := strings.Index(s[openIdxEnd:], close)
+			if closeIdx < 0 {
+				i += openIdxEnd
+				s = s[openIdxEnd:]
+				continue
+			}
+			closeIdx += openIdxEnd
+			varName := strings.TrimSpace(s[openIdxEnd:closeIdx])
+
+			v = parseVarName(varName)
+			if v.varName == "" {
+				i += closeIdx + len(close)
+				s = s[closeIdx+len(close):]
+				continue
+			}
+
+			v.open = i + nextIdx
+			v.close = i + closeIdx
+			endIdx = closeIdx + len(close)
+		} else {
+			// Handle $name pattern
+			varName, varEnd := extractDollarVarName(s[nextIdx:])
+			if varName == "" {
+				i += nextIdx + 1
+				s = s[nextIdx+1:]
+				continue
+			}
+
+			v = parseVarName(varName)
+			if v.varName == "" {
+				i += nextIdx + 1
+				s = s[nextIdx+1:]
+				continue
+			}
+
+			v.open = i + nextIdx
+			v.close = i + nextIdx + varEnd - 1
+			endIdx = nextIdx + varEnd
 		}
 
 		varMap[v.varName] = true
-		v.open = i + openIdx
-		v.close = i + closeIdx
 		index++
 		v.index = index
 		positions = append(positions, v)
-		i += closeIdx + len(close)
-		s = s[closeIdx+len(close):]
+		i += endIdx
+		s = s[endIdx:]
 	}
 
 	return &Template{

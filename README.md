@@ -4,12 +4,15 @@ A powerful Go template library for string interpolation with support for default
 
 ## Features
 
-- **Variable Substitution**: Replace `${variable}` placeholders with actual values
+- **Variable Substitution**: Replace `${variable}` or `$variable` placeholders with actual values
+- **Dollar Syntax**: Use shell-like `$name` syntax as equivalent to `${name}`
+- **Separator Handling**: Automatic separator detection for `$name.txt` → `${name}.txt`, `$name_suffix` → `${name_suffix}`
 - **Default Values**: Specify default values with `${variable?:default}`
 - **Required Variables**: Mark variables as required with `${variable!}`
 - **Type Hints**: Specify number types with `${variable:%d}` for automatic quote removal
 - **Repeat Modes**: Control variable uniqueness with `${variable:+}` (unique) or `${variable:*}` (any)
 - **Built-in Macros**: Use `${@timestamp}`, `${@timestamp_ms}`, `${@timestamp_us}`, `${@timestamp_ns}`
+- **Mixed Syntax**: Combine both `${name}` and `$name` syntax in the same template
 - **Robust Parsing**: Handles complex default values including URLs and special characters
 
 ## Installation
@@ -29,13 +32,29 @@ import (
 )
 
 func main() {
-    // Basic usage
+    // Basic usage with ${name} syntax
     tmpl := template.Compile("Hello ${name}")
     result, err := tmpl.Execute(map[string]string{"name": "World"})
     if err != nil {
         panic(err)
     }
     fmt.Println(result) // Output: Hello World
+    
+    // Using $name syntax (equivalent to ${name})
+    tmpl2 := template.Compile("Hello $name")
+    result2, err := tmpl2.Execute(map[string]string{"name": "World"})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result2) // Output: Hello World
+    
+    // Mixed syntax with separator handling
+    tmpl3 := template.Compile("File: $name.txt, Size: ${size?:0} bytes")
+    result3, err := tmpl3.Execute(map[string]string{"name": "document"})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result3) // Output: File: document.txt, Size: 0 bytes
 }
 ```
 
@@ -50,6 +69,40 @@ template.Compile("Hello ${name}")
 // Variable with spaces (trimmed automatically)
 template.Compile("Hello ${ name }")
 ```
+
+### Dollar Syntax
+
+The library supports shell-like `$name` syntax as an equivalent to `${name}`:
+
+```go
+// Simple dollar variable
+template.Compile("Hello $name")
+
+// Mixed syntax in same template
+template.Compile("Hello $name, you are ${age} years old")
+
+// Separator handling - dot stops variable name
+template.Compile("File: $name.txt")  // $name is the variable, .txt is literal
+
+// Underscore is part of variable name
+template.Compile("Config: $db_host")  // $db_host is the variable name
+
+// Complex URLs and paths
+template.Compile("$scheme://$host:$port/$path")
+
+// Dollar macros
+template.Compile("Time: $@timestamp")
+```
+
+#### Separator Rules
+
+The `$name` syntax automatically handles separators:
+
+- **Dot separator**: `$name.txt` → variable is `name`, `.txt` is literal
+- **Colon separator**: `$host:$port` → variables are `host` and `port`
+- **Slash separator**: `$path/file` → variable is `path`, `/file` is literal
+- **Space separator**: `$first $second` → variables are `first` and `second`
+- **Underscore**: `$name_suffix` → variable is `name_suffix` (underscore is part of name)
 
 ### Required Variables
 
@@ -175,6 +228,41 @@ for i := 0; i < tmpl.NumVars(); i++ {
 ```
 
 ## Examples
+
+### Dollar Syntax Examples
+
+```go
+// Simple file path template
+pathTemplate := "$dir/$name.txt"
+tmpl := template.Compile(pathTemplate)
+path, err := tmpl.Execute(map[string]string{
+    "dir":  "/var/log",
+    "name": "app",
+})
+// Result: /var/log/app.txt
+
+// URL template with mixed syntax
+urlTemplate := "$scheme://$host:$port/${path?:api}"
+tmpl := template.Compile(urlTemplate)
+url, err := tmpl.Execute(map[string]string{
+    "scheme": "https",
+    "host":   "api.example.com",
+    "port":   "443",
+})
+// Result: https://api.example.com:443/api
+
+// Database connection string
+dbTemplate := "$user:$password@$host:$port/$database"
+tmpl := template.Compile(dbTemplate)
+dsn, err := tmpl.Execute(map[string]string{
+    "user":     "admin",
+    "password": "secret",
+    "host":     "localhost",
+    "port":     "5432",
+    "database": "myapp",
+})
+// Result: admin:secret@localhost:5432/myapp
+```
 
 ### Configuration Template
 
