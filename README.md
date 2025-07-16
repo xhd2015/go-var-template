@@ -18,7 +18,7 @@ A powerful Go template library for string interpolation with support for default
 ## Installation
 
 ```bash
-go get github.com/xhd2015/less-gen/go-var-template
+go get github.com/xhd2015/go-var-template
 ```
 
 ## Quick Start
@@ -28,7 +28,7 @@ package main
 
 import (
     "fmt"
-    "github.com/xhd2015/less-gen/go-var-template"
+    "github.com/xhd2015/go-var-template"
 )
 
 func main() {
