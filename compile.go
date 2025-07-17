@@ -1,6 +1,7 @@
 package var_template
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -24,7 +25,7 @@ const (
 //	${a:uniq}
 //
 // separators:  !, ?:, :,
-// accepted options:  %d, *, +
+// accepted options:  %d, *, +, :file, :bash, :shell_quote
 type varAndPosition struct {
 	// the original raw string
 	raw             string
@@ -36,9 +37,13 @@ type varAndPosition struct {
 	defaultValue    string // has ?:something
 	required        bool   // has ! suffix
 	isMacro         bool
-	open            int // begin of ${
-	close           int // position of }
-	index           int // $在整个字符串中出现在第几个位置（全局唯一）
+	// New directive fields
+	isFile       bool // has :file suffix
+	isBash       bool // has :bash suffix
+	isShellQuote bool // has :shell_quote suffix
+	open         int  // begin of ${
+	close        int  // position of }
+	index        int  // $'s position in the string (global unique)
 }
 
 func (c *varAndPosition) clone() *varAndPosition {
@@ -250,11 +255,49 @@ func Compile(template string) *Template {
 		s = s[endIdx:]
 	}
 
+	// Post-process to handle escaped sequences and adjust positions
+	processedTemplate, adjustedPositions := processEscapesAndAdjustPositions(template, positions)
+
 	return &Template{
-		template:     template,
-		varPositions: positions,
+		template:     processedTemplate,
+		varPositions: adjustedPositions,
 		vars:         getVars(varMap),
 	}
+}
+
+// processEscapesAndAdjustPositions removes backslashes from escaped variable patterns
+// and adjusts variable positions accordingly
+func processEscapesAndAdjustPositions(template string, positions []*varAndPosition) (string, []*varAndPosition) {
+	result := template
+	adjustedPositions := make([]*varAndPosition, len(positions))
+
+	// Copy positions
+	for i, pos := range positions {
+		adjustedPositions[i] = pos.clone()
+	}
+
+	// Process escapes and adjust positions
+	adjustment := 0
+	for i := 0; i < len(result); i++ {
+		if i > 0 && result[i-1] == '\\' && (result[i] == '$') {
+			// Remove the backslash
+			result = result[:i-1] + result[i:]
+			i-- // Adjust index after removal
+			adjustment++
+
+			// Adjust all positions that come after this escape
+			for _, pos := range adjustedPositions {
+				if pos.open > i {
+					pos.open--
+				}
+				if pos.close > i {
+					pos.close--
+				}
+			}
+		}
+	}
+
+	return result, adjustedPositions
 }
 
 func parseVarName(varName string) *varAndPosition {
@@ -266,6 +309,9 @@ func parseVarName(varName string) *varAndPosition {
 	var defaultValue string
 	var repMode = repeatMode_Same
 	var isMacro bool
+	var isFile bool
+	var isBash bool
+	var isShellQuote bool
 
 	// Handle macro prefix
 	if strings.HasPrefix(varName, "@") {
@@ -273,7 +319,15 @@ func parseVarName(varName string) *varAndPosition {
 		actualVarName = varName // Keep the @ prefix for macros
 	} else {
 		// Parse using the new approach
-		actualVarName, required, hasDefaultValue, defaultValue, isNumber, repMode = parseVariableDefinition(varName)
+		var err error
+		actualVarName, required, hasDefaultValue, defaultValue, isNumber, repMode, isFile, isBash, isShellQuote, err = parseVariableDefinition(varName)
+		if err != nil {
+			// Return an empty varAndPosition for invalid variables
+			return &varAndPosition{
+				raw:     varName,
+				varName: "",
+			}
+		}
 	}
 
 	return &varAndPosition{
@@ -285,12 +339,34 @@ func parseVarName(varName string) *varAndPosition {
 		defaultValue:    defaultValue,
 		required:        required,
 		isMacro:         isMacro,
+		// New directive fields
+		isFile:       isFile,
+		isBash:       isBash,
+		isShellQuote: isShellQuote,
 	}
 }
 
 // parseVariableDefinition parses a variable definition using the new approach
-func parseVariableDefinition(varName string) (name string, required bool, hasDefault bool, defaultVal string, isNumber bool, repMode repeatMode) {
+func parseVariableDefinition(varName string) (name string, required bool, hasDefault bool, defaultVal string, isNumber bool, repMode repeatMode, isFile bool, isBash bool, isShellQuote bool, err error) {
 	repMode = repeatMode_Same
+
+	// Special handling for bash directive - check if it ends with :bash
+	if strings.HasSuffix(varName, ":bash") {
+		// Check for multiple directives first
+		beforeBash := varName[:len(varName)-5] // Remove ":bash"
+
+		// For bash directive, the variable name is the command (everything before :bash)
+		name = beforeBash
+		isBash = true
+		return
+	}
+	if strings.HasSuffix(varName, ":file") {
+		// Check for multiple directives first
+		beforeFile := varName[:len(varName)-5] // Remove ":file"
+		name = beforeFile
+		isFile = true
+		return
+	}
 
 	// Step 1: Find the variable name (everything before the first ?: or :)
 	var nameEnd int
@@ -320,6 +396,11 @@ func parseVariableDefinition(varName string) (name string, required bool, hasDef
 	if remainder != "" && strings.HasPrefix(remainder, ":") {
 		remainder = remainder[1:] // Skip ":"
 
+		// Check for multiple directives (should be an error)
+		if strings.Contains(remainder, ":") {
+			return "", false, false, "", false, repeatMode_Same, false, false, false, fmt.Errorf("multiple directives not allowed: %s", remainder)
+		}
+
 		// Check for directives
 		if remainder == "%d" {
 			isNumber = true
@@ -327,6 +408,8 @@ func parseVariableDefinition(varName string) (name string, required bool, hasDef
 			repMode = repeatMode_Uniq
 		} else if remainder == "*" {
 			repMode = repeatMode_Any
+		} else if remainder == "shell_quote" {
+			isShellQuote = true
 		}
 	}
 
@@ -365,7 +448,7 @@ func extractDefaultValue(remainder string) (defaultVal string, remaining string)
 			// Check if this is followed by a directive
 			if i+1 < len(remainder) {
 				next := remainder[i+1:]
-				if next == "%d" || next == "+" || next == "*" {
+				if next == "%d" || next == "+" || next == "*" || next == "file" || next == "bash" || next == "shell_quote" {
 					// This is a directive marker
 					return remainder[:i], remainder[i:]
 				}

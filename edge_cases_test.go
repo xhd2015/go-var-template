@@ -77,13 +77,13 @@ func TestEdgeCases(t *testing.T) {
 			name:     "multiple escape sequences",
 			template: "\\${escaped1} and \\${escaped2}",
 			vars:     map[string]string{},
-			want:     "\\${escaped1} and \\${escaped2}",
+			want:     "${escaped1} and ${escaped2}",
 		},
 		{
 			name:     "mixed escaped and unescaped",
 			template: "\\${escaped} and ${unescaped}",
 			vars:     map[string]string{"unescaped": "value"},
-			want:     "\\${escaped} and value",
+			want:     "${escaped} and value",
 		},
 		{
 			name:     "number variable with zero",

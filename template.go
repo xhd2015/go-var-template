@@ -2,6 +2,8 @@ package var_template
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,7 +107,25 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 	for j, vr := range c.varPositions {
 		var val string
 		var ok bool
-		if vr.isMacro {
+
+		if vr.isFile {
+			// also use varname as file directly
+			if data, err := os.ReadFile(vr.varName); err == nil {
+				val = string(data)
+				ok = true
+			} else {
+				return nil, fmt.Errorf("failed to read file %s: %v", vr.varName, err)
+			}
+		} else if vr.isBash {
+			// Execute bash command using variable name
+			cmd := exec.Command("bash", "-c", vr.varName)
+			if output, err := cmd.Output(); err == nil {
+				val = strings.TrimRight(string(output), "\n\r")
+				ok = true
+			} else {
+				return nil, fmt.Errorf("failed to execute bash command %s: %v", vr.varName, err)
+			}
+		} else if vr.isMacro {
 			if applyMacro {
 				macro := vr.varName
 				if strings.HasPrefix(macro, "@") {
@@ -142,6 +162,7 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 		if !ok {
 			if applyDefault && !vr.isMacro && vr.hasDefaultValue {
 				val = vr.defaultValue
+				ok = true // Mark as ok so directives can be applied
 			} else {
 				if validateRequired && vr.required {
 					return nil, fmt.Errorf("required variable %s is missing", vr.raw)
@@ -154,6 +175,14 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 				b.WriteString(s[oldIdx:varEndPos])
 				oldIdx = varEndPos
 				continue
+			}
+		}
+
+		// Process other directives if value is found (from variables or default)
+		if ok && val != "" && !vr.isBash && !vr.isFile {
+			if vr.isShellQuote {
+				// Shell quote the value
+				val = quoteShellStr(val)
 			}
 		}
 
@@ -179,6 +208,17 @@ func (c *Template) apply(vars map[string]string, validateRequired bool, applyDef
 		varPositions: missingVarPositions,
 		vars:         getVars(missingVarMap),
 	}, nil
+}
+
+func quoteShellStr(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.ContainsAny(s, "\t \n;<>\\${}()&!*") { // special args
+		s = strings.ReplaceAll(s, "'", "'\\''")
+		return "'" + s + "'"
+	}
+	return s
 }
 
 // isDollarSyntax checks if a variable at the given position uses $name syntax

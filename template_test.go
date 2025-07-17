@@ -1,6 +1,7 @@
 package var_template
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -761,6 +762,299 @@ func TestDollarSyntaxSeparators(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewDirectives(t *testing.T) {
+	// Test file directive
+	t.Run("file directive", func(t *testing.T) {
+		// Create a temporary file
+		tmpFile, err := os.CreateTemp("", "test_file_*.txt")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		testContent := "Hello from file!"
+		if _, err := tmpFile.WriteString(testContent); err != nil {
+			t.Fatalf("Failed to write to temp file: %v", err)
+		}
+		tmpFile.Close()
+
+		fileName := tmpFile.Name()
+		tmpl := Compile("Content: ${" + fileName + ":file}")
+		result, err := tmpl.Execute(map[string]string{
+			fileName: "not_exist",
+		})
+		if err != nil {
+			t.Errorf("Execute() error = %v", err)
+			return
+		}
+
+		expected := "Content: " + testContent
+		if result != expected {
+			t.Errorf("Execute() = %q, want %q", result, expected)
+		}
+	})
+
+	// Test bash directive
+	t.Run("bash directive", func(t *testing.T) {
+		tmpl := Compile("Output: ${echo 'Hello from bash':bash}")
+		result, err := tmpl.Execute(map[string]string{})
+		if err != nil {
+			t.Errorf("Execute() error = %v", err)
+			return
+		}
+
+		expected := "Output: Hello from bash"
+		if result != expected {
+			t.Errorf("Execute() = %q, want %q", result, expected)
+		}
+	})
+
+	// Test shell_quote directive
+	t.Run("shell_quote directive", func(t *testing.T) {
+		tmpl := Compile("Quoted: ${str:shell_quote}")
+		result, err := tmpl.Execute(map[string]string{
+			"str": "hello world & echo 'test'",
+		})
+		if err != nil {
+			t.Errorf("Execute() error = %v", err)
+			return
+		}
+
+		// The result should be shell-quoted
+		if !strings.Contains(result, "Quoted: ") {
+			t.Errorf("Execute() = %q, should contain 'Quoted: '", result)
+		}
+
+		// Should be properly quoted for shell safety
+		quotedPart := strings.TrimPrefix(result, "Quoted: ")
+		if quotedPart == "hello world & echo 'test'" {
+			t.Errorf("String should be quoted, but got: %q", quotedPart)
+		}
+		expected := `'hello world & echo '\''test'\'''`
+		if quotedPart != expected {
+			t.Errorf("Execute() = %s, want %s", quotedPart, expected)
+		}
+	})
+
+	// Test error cases
+	t.Run("file directive with non-existent file", func(t *testing.T) {
+		tmpl := Compile("Content: ${filename:file}")
+		_, err := tmpl.Execute(map[string]string{
+			"filename": "/non/existent/file.txt",
+		})
+		if err == nil {
+			t.Error("Expected error for non-existent file, but got none")
+		}
+	})
+
+	t.Run("bash directive with failing command", func(t *testing.T) {
+		tmpl := Compile("Output: ${exit 1:bash}")
+		_, err := tmpl.Execute(map[string]string{})
+		if err == nil {
+			t.Error("Expected error for failing command, but got none")
+		}
+	})
+
+	// Test directive parsing
+	t.Run("directive parsing", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			template string
+			wantVars []string
+		}{
+			{
+				name:     "file directive",
+				template: "${var:file}",
+				wantVars: []string{"var"},
+			},
+			{
+				name:     "bash directive",
+				template: "${var:bash}",
+				wantVars: []string{"var"},
+			},
+			{
+				name:     "shell_quote directive",
+				template: "${var:shell_quote}",
+				wantVars: []string{"var"},
+			},
+			{
+				name:     "multiple directives",
+				template: "${file:file} ${cmd:bash} ${str:shell_quote}",
+				wantVars: []string{"cmd", "file", "str"},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				tmpl := Compile(tt.template)
+				if got := tmpl.Variables(); !stringSliceEqual(got, tt.wantVars) {
+					t.Errorf("Variables() = %v, want %v", got, tt.wantVars)
+				}
+			})
+		}
+	})
+
+	// Test directive with default values
+	t.Run("directive with default values", func(t *testing.T) {
+		// Create a temporary file with default content
+		tmpFile, err := os.CreateTemp("", "default_*.txt")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		defaultContent := "Default content"
+		if _, err := tmpFile.WriteString(defaultContent); err != nil {
+			t.Fatalf("Failed to write to temp file: %v", err)
+		}
+		tmpFile.Close()
+
+		tmpl := Compile("Content: ${filename?:" + tmpFile.Name() + ":file}")
+		result, err := tmpl.Execute(map[string]string{})
+		if err == nil {
+			t.Errorf("Execute() no error = %v, want error", err)
+			return
+		}
+		_ = result
+	})
+}
+
+func TestMultipleDirectiveValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		wantVars []string
+		wantErr  bool
+	}{
+		{
+			name:     "single file directive",
+			template: "${var:file}",
+			wantVars: []string{"var"},
+			wantErr:  false,
+		},
+		{
+			name:     "single bash directive",
+			template: "${var:bash}",
+			wantVars: []string{"var"},
+			wantErr:  false,
+		},
+		{
+			name:     "single shell_quote directive",
+			template: "${var:shell_quote}",
+			wantVars: []string{"var"},
+			wantErr:  false,
+		},
+		{
+			name:     "multiple directives file:bash",
+			template: "${var:file:bash}",
+			wantVars: []string{"var:file"},
+			wantErr:  false,
+		},
+		{
+			name:     "multiple directives bash:shell_quote",
+			template: "${var:bash:shell_quote}",
+			wantVars: []string{},
+			wantErr:  true,
+		},
+		{
+			name:     "multiple directives file:bash:shell_quote",
+			template: "${var:file:bash:shell_quote}",
+			wantVars: []string{},
+			wantErr:  true,
+		},
+		{
+			name:     "directive with type hint",
+			template: "${var:%d:file}",
+			wantVars: []string{"var:%d"},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := Compile(tt.template)
+
+			// Check if variables were parsed correctly (empty if error expected)
+			if got := tmpl.Variables(); !stringSliceEqual(got, tt.wantVars) {
+				if !tt.wantErr {
+					t.Errorf("Variables() = %v, want %v", got, tt.wantVars)
+				}
+			}
+
+			// For multiple directives, the variable should be empty (indicating parse error)
+			if tt.wantErr && len(tmpl.Variables()) > 0 {
+				t.Errorf("Expected parse error for multiple directives, but got variables: %v", tmpl.Variables())
+			}
+		})
+	}
+}
+
+func TestImprovedEscapeHandling(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		vars     map[string]string
+		want     string
+	}{
+		{
+			name:     "escaped brace variable",
+			template: "Hello \\${name}",
+			vars:     map[string]string{"name": "World"},
+			want:     "Hello ${name}",
+		},
+		{
+			name:     "escaped dollar variable",
+			template: "Hello \\$name",
+			vars:     map[string]string{"name": "World"},
+			want:     "Hello $name",
+		},
+		{
+			name:     "mixed escaped and unescaped brace",
+			template: "\\${escaped} and ${unescaped}",
+			vars:     map[string]string{"unescaped": "value"},
+			want:     "${escaped} and value",
+		},
+		{
+			name:     "mixed escaped and unescaped dollar",
+			template: "\\$escaped and $unescaped",
+			vars:     map[string]string{"unescaped": "value"},
+			want:     "$escaped and value",
+		},
+		{
+			name:     "multiple escaped sequences",
+			template: "\\${first} and \\${second} and \\$third",
+			vars:     map[string]string{},
+			want:     "${first} and ${second} and $third",
+		},
+		{
+			name:     "escaped in middle of text",
+			template: "Start \\${middle} end",
+			vars:     map[string]string{"middle": "value"},
+			want:     "Start ${middle} end",
+		},
+		{
+			name:     "escaped with special characters",
+			template: "Path: \\${HOME}/file.txt",
+			vars:     map[string]string{"HOME": "/home/user"},
+			want:     "Path: ${HOME}/file.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := Compile(tt.template)
+			result, err := tmpl.Execute(tt.vars)
+			if err != nil {
+				t.Errorf("Execute() error = %v", err)
+				return
+			}
+			if result != tt.want {
+				t.Errorf("Execute() = %q, want %q", result, tt.want)
 			}
 		})
 	}
